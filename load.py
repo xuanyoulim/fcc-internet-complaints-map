@@ -7,7 +7,7 @@ from sodapy import Socrata
 # client = Socrata("opendata.fcc.gov", None)
 
 # Example authenticated client (needed for non-public datasets):
-client = Socrata(opendata.fcc.gov,
+client = Socrata("opendata.fcc.gov",
                  config.api_token,
                  username=config.api_key,
                  password=config.api_secret)
