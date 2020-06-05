@@ -3,6 +3,7 @@ import config
 import requests
 from pathlib import Path
 from time import perf_counter
+from datetime import datetime
 
 import pandas as pd
 from sodapy import Socrata
@@ -22,46 +23,67 @@ def coord_to_county(lat, lon):
         print("Error: getting county from coordinates")
         return None
 
-def generate_ym_total_csv():
-    # generate autheticated Socrata client based on api key from 
+def generate_ym_total_csv(year_start, month_start, year_end, month_end, log=True):
+    '''For data from year_start-month_start to year_end-month_end,
+    queries fcc api and processes location data (to add county)
+    and generates total count by year-month into csv file: year-month.csv'''
+
+    coord_to_county_dict = {} # dict to store location coord to county, fewer api calls
+
+    # variables for sanity checks
+    total_no_coord_counter = 0
+    total_fcc_block_call = 0
+    tic = 0
+
+    # generate autheticated Socrata client based on api key from config
     client = Socrata("opendata.fcc.gov",
                     config.api_token,
                     username=config.api_key,
                     password=config.api_secret)
 
-    year_start = 2014
-    month_start = 10
-    year_end = 2014
-    month_end = 12
-    coord_to_county_dict = {}
-    no_coord_counter = 0
 
     for year in range(year_start, year_end + 1):
+        # determine range of month in current year
         sm = 1
         em = 12
         if year == year_start:
             sm = month_start
         if year == year_end:
             em = month_end
-        m_range = range(sm, em+1)
+        m_range = range(sm, em + 1)
         for month in m_range:
             mo = str(month) if month >= 10 else "0"+str(month)
             ym = f"{year}-{mo}"
             date_start = f"{year}-{mo}-01T00:00:00.000"
+            # generate date_end for query
             if month == 12:
                 date_end = f"{str(year + 1)}-01-01"
             else:
                 mo = str(month + 1) if month >= 9 else "0"+str(month+1)
                 date_end = f"{str(year)}-{mo}-01"
+
+            # logging
+            if log == True:
+                print(f"Processing {ym} data...")
+                tic = perf_counter()
+                issues_processed = 0
+            # query api
+            count_query = f"SELECT count(*)\
+                            WHERE ticket_created >= '{date_start}'\
+                            AND ticket_created < '{date_end}'\
+                            AND issue_type = 'Internet'"
+            count_result = client.get("3xyp-aqkj", query=count_query)
+            count = count_result[0]['count']
             query = f"SELECT method, issue, city, state, zip, location_1\
-                    WHERE ticket_created >= '{date_start}'\
-                    AND ticket_created < '{date_end}'\
-                    AND issue_type = 'Internet'"
+                        WHERE ticket_created >= '{date_start}'\
+                        AND ticket_created < '{date_end}'\
+                        AND issue_type = 'Internet'\
+                        LIMIT {str(count)}"
             results = client.get("3xyp-aqkj", query=query)
 
             results_df = pd.DataFrame.from_records(results)
 
-            # add column for c_fips by calling coord_to_county
+            # find out county information for specific location from api call
             c_fips = []
             county = []
 
@@ -72,52 +94,58 @@ def generate_ym_total_csv():
                     loc_dict = {}
                     if (lat, lon) not in coord_to_county_dict.keys():
                         loc_dict = coord_to_county(coord['latitude'], coord['longitude'])
+                        total_fcc_block_call += 1
                         coord_to_county_dict[(lat, lon)] = loc_dict
                     else:
                         loc_dict = coord_to_county_dict[(lat, lon)]
                     c_fips.append(loc_dict['c_fips'])
                     county.append(loc_dict['county'])
                 except:
-                    no_coord_counter += 1
+                    total_no_coord_counter += 1
                     c_fips.append(None)
                     county.append(None)
 
+            # add county information column
             results_df['county'] = county
             results_df['c_fips'] = c_fips
 
-            # SELECT c_fips, county name, count
+            # SELECT c_fips, county name, state code, count(*), GROUP BY c_fips
             # generate df for count, group by c_fips
             counts_df = results_df.groupby(['c_fips', 'county', 'state']).size().reset_index(name="total")
             counts_df.set_index('c_fips')
 
-            # get and process county population
+            # add county population information into dataframe
             COUNTY_POP = Path('..') / "co-est2019-alldata.csv"
-            # COUNTY_POP = "../co-est2019-alldata-csv"
-            columns = []
-            columns.append('STATE')
-            columns.append('COUNTY')
+            pop_year = year if year <= 2019 else 2019
+            columns = ['STATE', 'COUNTY', f"POPESTIMATE{str(pop_year)}"]
             dtypes={'STATE': 'str', 'COUNTY': 'str'}
-
-            # for year in range(2014, 2020):
-            #     col_name = f"POPESTIMATE{str(year)}"
-            #     columns.append(col_name)
-            columns.append(f"POPESTIMATE{str(year)}")
 
             county_pop_df = pd.read_csv(COUNTY_POP, dtype=dtypes, usecols=columns)
             county_pop_df['c_fips'] = county_pop_df['STATE'] + county_pop_df['COUNTY']
             county_pop_df.set_index('c_fips')
 
-            # add column for county_pop (or complaints per capita)
+            # join on c_fips and calculate per capita
             combined_df = pd.merge(counts_df, county_pop_df, on='c_fips')
-
-            # calculate per capita
-            # combined_df['per_capita'] = combined_df['total'].astype(float) / combined_df['POPESTIMATE2014'].astype(float)
-            combined_df = combined_df.assign(per_capita=combined_df['total']/combined_df[f'POPESTIMATE{str(year)}'])
-
+            combined_df = combined_df.assign(per_capita=combined_df['total']/combined_df[f'POPESTIMATE{str(pop_year)}'])
             downsized_df = combined_df[['c_fips', 'county', 'state', 'total', 'per_capita']]
-            # write to csv y-m.csv: c_fips, county name, state(?), count
-            # with open("csv/2014-10.csv", mode="w+", newline='') as csvfile:
-            write_to_csv = Path('.') / f"csv/{ym}.csv"
-            downsized_df.to_csv(write_to_csv, index=False)
 
-generate_ym_total_csv()
+            # write to csv y-m.csv: c_fips, county name, state(?), count
+            csvfile = Path('.') / f"csv/{ym}.csv"
+            downsized_df.to_csv(csvfile, index=False)
+
+            # finish logging
+            if log == True:
+                toc = perf_counter()
+                issues_processed = len(results_df)
+                print(f"Finish processing {ym} data. Took {toc - tic:0.2f}s to process {issues_processed} issues.")
+
+    if log == True:
+        print(f"Total issues with no coordinates: {total_no_coord_counter}")
+        print(f"Total calls to FCC Block API: {total_fcc_block_call}")
+
+if __name__ == "__main__":
+    now = datetime.now()
+    print(f"Started {str(now)}")
+    generate_ym_total_csv(2014, 10, 2020, 6)
+    now = datetime.now()
+    print(f"Ended {str(now)}")
