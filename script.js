@@ -1,5 +1,5 @@
 (function() {
-    function update(svg, us, ym) {
+    function update(svg, us, ym, radius) {
         let file = '';
         file = file.concat("csv/", ym, ".csv");
         d3.csv(file).then(function(data) {
@@ -18,7 +18,7 @@
             data = new Map(data);
             
             format = d3.format(",.7f");
-            radius = d3.scaleSqrt([0, d3.quantile([...data.values()].sort(d3.ascending), 0.985)], [0, 10])
+            // radius = d3.scaleSqrt([0, d3.quantile([...data.values()].sort(d3.ascending), 0.985)], [0, 10])
 
             svg.select("g")
                 .selectAll("circle")
@@ -26,13 +26,20 @@
                 .map(d => (d.value = data.get(d.id), d))
                 .sort((a, b) => b.value - a.value))
             .join("circle")
+                .transition()
+                .duration(1000)
+                .ease(d3.easeLinear)
                 .attr("transform", d => `translate(${path.centroid(d)})`)
-                .attr("r", d => radius(d.value))
+                .attr("r", d => radius(d.value));
+
+            svg.select("g")
+                .selectAll("circle")
                 .append("title")
                 .text(d => `${d.properties.name}${format(d.value)}`);
 
             // change label
             d3.select("body").select("h2").text(ym);
+
         });
     }
 
@@ -73,6 +80,28 @@
             let endY = 2020;
             let endM = 5;
 
+            radius = d3.scaleSqrt([0, 0.001], [0, 15]);
+
+            const legend = svg.append("g")
+            .attr("fill", "#777")
+            .attr("transform", "translate(925,608)")
+            .attr("text-anchor", "middle")
+            .style("font", "10px sans-serif")
+          .selectAll("g")
+            .data([0.001, 0.005, 0.01])
+          .join("g");
+      
+            legend.append("circle")
+            .attr("fill", "none")
+            .attr("stroke", "#ccc")
+            .attr("cy", d => -radius(d))
+            .attr("r", radius);
+      
+            legend.append("text")
+            .attr("y", d => -2 * radius(d))
+            .attr("dy", "1.3em")
+            .text(d3.format(".4"));
+
             var animate = setInterval(function() {
                 // get year-month string
                 let yStr = y.toString();
@@ -83,7 +112,7 @@
                 let ym = yStr.concat("-", mStr);
 
                 // call update function
-                update(svg, us, ym);
+                update(svg, us, ym, radius);
 
                 // check for end point
                 if (y == endY && m == endM) {
@@ -99,7 +128,7 @@
                 } else {
                     m += 1;
                 }
-            }, 1000);
+            }, 2000);
         })
         .catch(function(error){
             console.log(error);
