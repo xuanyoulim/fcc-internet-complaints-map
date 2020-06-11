@@ -1,5 +1,5 @@
 # FCC Complaints Regarding Internet By County Map
-*Note: This is developed as my final asssignment for COM 461: Data Reporting Spring 2020*
+*Note: This is developed as part of my final asssignment for COM 461: Data Reporting Spring 2020*
 
 ## Data source
 The raw data of the complaints submitted to the FCC regarding internet issues is obtained through calls to the [FCC's Consumer Complaints Data API](https://dev.socrata.com/foundry/opendata.fcc.gov/3xyp-aqkj).
